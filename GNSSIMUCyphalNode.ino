@@ -88,6 +88,7 @@ cyphal::Publisher<Heartbeat_1_0> heartbeat_pub = node_hdl.create_publisher<Heart
 cyphal::Publisher<uavcan::primitive::scalar::Real32_1_0> input_voltage_pub;
 cyphal::Publisher<uavcan::primitive::scalar::Real32_1_0> internal_temperature_pub;
 cyphal::Publisher<uavcan::primitive::scalar::Real32_1_0> orientation_x_pub;
+cyphal::Publisher<uavcan::primitive::array::Natural8_1_0> calibration_pub;
 
 cyphal::Subscription led_subscription;
 
@@ -147,10 +148,12 @@ static CanardPortID port_id_input_voltage        = std::numeric_limits<CanardPor
 static CanardPortID port_id_led1                 = std::numeric_limits<CanardPortID>::max();
 static CanardPortID port_id_internal_temperature = std::numeric_limits<CanardPortID>::max();
 static CanardPortID port_id_orientation_x        = std::numeric_limits<CanardPortID>::max();
+static CanardPortID port_id_calibration          = std::numeric_limits<CanardPortID>::max();
 
 static uint16_t update_period_ms_inputvoltage        =  3*1000;
 static uint16_t update_period_ms_internaltemperature = 10*1000;
 static uint16_t update_period_ms_orientation         =     100;
+static uint16_t update_period_ms_calibration         =     500;
 
 static std::string node_description{"GNSSIMUCyphalNode"};
 
@@ -168,9 +171,12 @@ const auto reg_rw_cyphal_sub_led1_id                        = node_registry->exp
 const auto reg_ro_cyphal_sub_led1_type                      = node_registry->route ("cyphal.sub.led1.type",                     {true}, []() { return "uavcan.primitive.scalar.Bit.1.0"; });
 const auto reg_rw_cyphal_pub_orientation_x_id               = node_registry->expose("cyphal.pub.orientation_x.id",              {true}, port_id_orientation_x);
 const auto reg_ro_cyphal_pub_orientation_x_type             = node_registry->route ("cyphal.pub.orientation_x.type",            {true}, []() { return "uavcan.primitive.scalar.Real32.1.0"; });
+const auto reg_rw_cyphal_pub_calibration_id                 = node_registry->expose("cyphal.pub.calibration.id",                {true}, port_id_calibration);
+const auto reg_ro_cyphal_pub_calibration_type               = node_registry->route ("cyphal.pub.calibration.type",              {true}, []() { return "uavcan.primitive.array.Natural8.1.0"; });
 const auto reg_rw_pico_update_period_ms_inputvoltage        = node_registry->expose("pico.update_period_ms.inputvoltage",        {true}, update_period_ms_inputvoltage);
 const auto reg_rw_pico_update_period_ms_internaltemperature = node_registry->expose("pico.update_period_ms.internaltemperature", {true}, update_period_ms_internaltemperature);
 const auto reg_rw_pico_update_period_ms_orientation         = node_registry->expose("pico.update_period_ms.orientation",         {true}, update_period_ms_orientation);
+const auto reg_rw_pico_update_period_ms_calibration         = node_registry->expose("pico.update_period_ms.calibration",         {true}, update_period_ms_calibration);
 
 #endif /* __GNUC__ >= 11 */
 
@@ -242,11 +248,14 @@ void setup()
 
   if (port_id_orientation_x != std::numeric_limits<CanardPortID>::max())
     orientation_x_pub = node_hdl.create_publisher<uavcan::primitive::scalar::Real32_1_0>(port_id_orientation_x, 1*100*1000UL /* = 100 msec in usecs. */);
+  if (port_id_calibration != std::numeric_limits<CanardPortID>::max())
+    calibration_pub = node_hdl.create_publisher<uavcan::primitive::array::Natural8_1_0>(port_id_calibration, 5*100*1000UL /* = 500 msec in usecs. */);
 
     /* set factory settings */
     if(update_period_ms_inputvoltage==0xFFFF)        update_period_ms_inputvoltage=3*1000;
     if(update_period_ms_internaltemperature==0xFFFF) update_period_ms_internaltemperature=10*1000;
     if(update_period_ms_orientation==0xFFFF)         update_period_ms_orientation=100;
+    if(update_period_ms_calibration==0xFFFF)         update_period_ms_calibration=100;
 
   /* NODE INFO **************************************************************************/
   static const auto node_info = node_hdl.create_node_info
@@ -376,6 +385,7 @@ void loop()
   static unsigned long prev_battery_voltage = 0;
   static unsigned long prev_internal_temperature = 0;
   static unsigned long prev_orientation = 0;
+  static unsigned long prev_calibration = 0;
 
   static sensors_event_t orientationData , linearAccelData;
 
@@ -422,6 +432,22 @@ void loop()
     prev_internal_temperature = now;
   }
 
+  /* BNO055 calibration data - every 500 ms */
+  if((now - prev_calibration) > update_period_ms_calibration)
+  {
+    uint8_t system, gyro, accel, mag;
+    system = gyro = accel = mag = 0;
+    bno.getCalibration(&system, &gyro, &accel, &mag);
+
+    uavcan::primitive::array::Natural8_1_0 uavcan_calibration;
+    uavcan_calibration.value[0] = system;
+    uavcan_calibration.value[1] = gyro;
+    uavcan_calibration.value[2] = accel;
+    uavcan_calibration.value[3] = mag;
+    if(calibration_pub) calibration_pub->publish(uavcan_calibration);
+
+    prev_calibration = now;
+  }
   /* update sensor function - every 100 ms */
   if((now - prev_orientation) > update_period_ms_orientation)
   {
