@@ -440,10 +440,10 @@ void loop()
     bno.getCalibration(&system, &gyro, &accel, &mag);
 
     uavcan::primitive::array::Natural8_1_0 uavcan_calibration;
-    uavcan_calibration.value[0] = system;
-    uavcan_calibration.value[1] = gyro;
-    uavcan_calibration.value[2] = accel;
-    uavcan_calibration.value[3] = mag;
+    uavcan_calibration.value.push_back(system);
+    uavcan_calibration.value.push_back(gyro);
+    uavcan_calibration.value.push_back(accel);
+    uavcan_calibration.value.push_back(mag);
     if(calibration_pub) calibration_pub->publish(uavcan_calibration);
 
     prev_calibration = now;
