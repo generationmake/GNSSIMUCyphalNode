@@ -93,6 +93,7 @@ cyphal::Publisher<uavcan::primitive::scalar::Integer16_1_0> analog_input_0_pub;
 cyphal::Publisher<uavcan::primitive::scalar::Integer16_1_0> analog_input_1_pub;
 cyphal::Publisher<uavcan::primitive::scalar::Integer16_1_0> motor_0_pwm_pub;
 cyphal::Publisher<uavcan::primitive::scalar::Integer16_1_0> motor_1_pwm_pub;
+cyphal::Publisher<uavcan::primitive::scalar::Real32_1_0> orientation_x_pub;
 
 cyphal::Subscription led_subscription;
 
@@ -160,13 +161,15 @@ static CanardPortID port_id_analog_input1        = std::numeric_limits<CanardPor
 static CanardPortID port_id_em_stop              = std::numeric_limits<CanardPortID>::max();
 static CanardPortID port_id_motor0_pwm           = std::numeric_limits<CanardPortID>::max();
 static CanardPortID port_id_motor1_pwm           = std::numeric_limits<CanardPortID>::max();
+static CanardPortID port_id_orientation_x        = std::numeric_limits<CanardPortID>::max();
 
 static uint16_t update_period_ms_inputvoltage        =  3*1000;
 static uint16_t update_period_ms_internaltemperature = 10*1000;
 static uint16_t update_period_ms_analoginput0        =     500;
 static uint16_t update_period_ms_analoginput1        =     500;
+static uint16_t update_period_ms_orientation         =     100;
 
-static std::string node_description{"RobotemRovne2025"};
+static std::string node_description{"GNSSIMUCyphalNode"};
 
 #if __GNUC__ >= 11
 
@@ -190,10 +193,13 @@ const auto reg_rw_cyphal_pub_motor0_pwm_id                  = node_registry->exp
 const auto reg_ro_cyphal_pub_motor0_pwm_type                = node_registry->route ("cyphal.pub.motor0pwm.type",                {true}, []() { return "uavcan.primitive.scalar.Integer16.1.0"; });
 const auto reg_rw_cyphal_pub_motor1_pwm_id                  = node_registry->expose("cyphal.pub.motor1pwm.id",                  {true}, port_id_motor1_pwm);
 const auto reg_ro_cyphal_pub_motor1_pwm_type                = node_registry->route ("cyphal.pub.motor1pwm.type",                {true}, []() { return "uavcan.primitive.scalar.Integer16.1.0"; });
+const auto reg_rw_cyphal_pub_orientation_x_id               = node_registry->expose("cyphal.pub.orientation_x.id",              {true}, port_id_orientation_x);
+const auto reg_ro_cyphal_pub_orientation_x_type             = node_registry->route ("cyphal.pub.orientation_x.type",            {true}, []() { return "uavcan.primitive.scalar.Real32.1.0"; });
 const auto reg_rw_pico_update_period_ms_inputvoltage        = node_registry->expose("pico.update_period_ms.inputvoltage",        {true}, update_period_ms_inputvoltage);
 const auto reg_rw_pico_update_period_ms_internaltemperature = node_registry->expose("pico.update_period_ms.internaltemperature", {true}, update_period_ms_internaltemperature);
 const auto reg_rw_pico_update_period_ms_analoginput0        = node_registry->expose("pico.update_period_ms.analoginput0",        {true}, update_period_ms_analoginput0);
 const auto reg_rw_pico_update_period_ms_analoginput1        = node_registry->expose("pico.update_period_ms.analoginput1",        {true}, update_period_ms_analoginput1);
+const auto reg_rw_pico_update_period_ms_orientation         = node_registry->expose("pico.update_period_ms.orientation",         {true}, update_period_ms_orientation);
 
 #endif /* __GNUC__ >= 11 */
 
@@ -271,6 +277,8 @@ void setup()
     motor_0_pwm_pub = node_hdl.create_publisher<uavcan::primitive::scalar::Integer16_1_0>(port_id_motor0_pwm, 1*1000*1000UL /* = 1 sec in usecs. */);
   if (port_id_motor1_pwm != std::numeric_limits<CanardPortID>::max())
     motor_1_pwm_pub = node_hdl.create_publisher<uavcan::primitive::scalar::Integer16_1_0>(port_id_motor1_pwm, 1*1000*1000UL /* = 1 sec in usecs. */);
+  if (port_id_orientation_x != std::numeric_limits<CanardPortID>::max())
+    orientation_x_pub = node_hdl.create_publisher<uavcan::primitive::scalar::Real32_1_0>(port_id_orientation_x, 1*100*1000UL /* = 100 msec in usecs. */);
   if (port_id_em_stop != std::numeric_limits<CanardPortID>::max())
     em_stop_subscription = node_hdl.create_subscription<uavcan::primitive::scalar::Bit_1_0>(
       port_id_em_stop,
@@ -285,6 +293,7 @@ void setup()
     if(update_period_ms_internaltemperature==0xFFFF) update_period_ms_internaltemperature=10*1000;
     if(update_period_ms_analoginput0==0xFFFF)        update_period_ms_analoginput0=500;
     if(update_period_ms_analoginput1==0xFFFF)        update_period_ms_analoginput1=500;
+    if(update_period_ms_orientation==0xFFFF)         update_period_ms_orientation=100;
 
   /* NODE INFO **************************************************************************/
   static const auto node_info = node_hdl.create_node_info
@@ -414,13 +423,8 @@ void loop()
   static unsigned long prev_internal_temperature = 0;
   static unsigned long prev_analog_input0 = 0;
   static unsigned long prev_analog_input1 = 0;
-  static unsigned long prev_sensor = 0;
-  static unsigned long prev_display = 0;
+  static unsigned long prev_orientation = 0;
 
-  static float heading_soll=0;
-  static float heading_offset=0;
-
-  static int pwm=0;
   static sensors_event_t orientationData , linearAccelData;
 
   unsigned long const now = millis();
@@ -484,12 +488,15 @@ void loop()
   }
 
   /* update sensor function - every 100 ms */
-  if((now - prev_sensor) > 100)
+  if((now - prev_orientation) > update_period_ms_orientation)
   {
-    static int bno_count=0;
     bno.getEvent(&orientationData, Adafruit_BNO055::VECTOR_EULER);
 
-    prev_sensor = now;
+    uavcan::primitive::scalar::Real32_1_0 uavcan_orientation_x;
+    uavcan_orientation_x.value = orientationData.orientation.x;
+    if(orientation_x_pub) orientation_x_pub->publish(uavcan_orientation_x);
+
+    prev_orientation = now;
   }
 
 
