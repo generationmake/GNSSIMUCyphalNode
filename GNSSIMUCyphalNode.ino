@@ -259,7 +259,7 @@ void setup()
   if (port_id_calibration != std::numeric_limits<CanardPortID>::max())
     calibration_pub = node_hdl.create_publisher<uavcan::primitive::array::Natural8_1_0>(port_id_calibration, 5*100*1000UL /* = 500 msec in usecs. */);
   if (port_id_coordinates != std::numeric_limits<CanardPortID>::max())
-    coordinates_pub = node_hdl.create_publisher<uavcan::primitive::array::Real32_1_0>(port_id_calibration, 1*1000*1000UL /* = 1 sec in usecs. */);
+    coordinates_pub = node_hdl.create_publisher<uavcan::primitive::array::Real32_1_0>(port_id_coordinates, 1*1000*1000UL /* = 1 sec in usecs. */);
 
     /* set factory settings */
     if(update_period_ms_inputvoltage==0xFFFF)        update_period_ms_inputvoltage=3*1000;
