@@ -467,7 +467,7 @@ void loop()
     bno.getEvent(&orientationData, Adafruit_BNO055::VECTOR_EULER);
 
     uavcan::primitive::scalar::Real32_1_0 uavcan_orientation_x;
-    uavcan_orientation_x.value = orientationData.orientation.x;
+    uavcan_orientation_x.value = orientationData.orientation.x-180.0;
     if(orientation_x_pub) orientation_x_pub->publish(uavcan_orientation_x);
 
     prev_orientation = now;
