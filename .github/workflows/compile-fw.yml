@@ -44,6 +44,7 @@ jobs:
             - source-path: ./
             - source-url: https://github.com/107-systems/107-Arduino-Cyphal.git
             - source-url: https://github.com/107-systems/107-Arduino-Cyphal-Support.git
+            - source-url: https://github.com/107-systems/107-Arduino-NMEA-Parser.git
             - name: 107-Arduino-Debug
             - name: 107-Arduino-MCP2515
             - name: 107-Arduino-UniqueId

@@ -21,6 +21,7 @@
 #include <107-Arduino-MCP2515.h>
 #include <107-Arduino-littlefs.h>
 #include <107-Arduino-24LCxx.hpp>
+#include <ArduinoNmeaParser.h>
 
 #define DBG_ENABLE_ERROR
 #define DBG_ENABLE_WARNING
@@ -61,6 +62,7 @@ static uint32_t const WATCHDOG_DELAY_ms = 1000;
  * FUNCTION DECLARATION
  **************************************************************************************/
 
+void onGgaUpdate(nmea::GgaData const);
 void onReceiveBufferFull(CanardFrame const & frame);
 ExecuteCommand::Response_1_1 onExecuteCommand_1_1_Request_Received(ExecuteCommand::Request_1_1 const &);
 
@@ -68,6 +70,7 @@ ExecuteCommand::Response_1_1 onExecuteCommand_1_1_Request_Received(ExecuteComman
  * GLOBAL VARIABLES
  **************************************************************************************/
 
+ArduinoNmeaParser parser(NULL, onGgaUpdate);
 Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28);
 
 DEBUG_INSTANCE(80, Serial);
@@ -89,6 +92,7 @@ cyphal::Publisher<uavcan::primitive::scalar::Real32_1_0> input_voltage_pub;
 cyphal::Publisher<uavcan::primitive::scalar::Real32_1_0> internal_temperature_pub;
 cyphal::Publisher<uavcan::primitive::scalar::Real32_1_0> orientation_x_pub;
 cyphal::Publisher<uavcan::primitive::array::Natural8_1_0> calibration_pub;
+cyphal::Publisher<uavcan::primitive::array::Real32_1_0> coordinates_pub;
 
 cyphal::Subscription led_subscription;
 
@@ -149,6 +153,7 @@ static CanardPortID port_id_led1                 = std::numeric_limits<CanardPor
 static CanardPortID port_id_internal_temperature = std::numeric_limits<CanardPortID>::max();
 static CanardPortID port_id_orientation_x        = std::numeric_limits<CanardPortID>::max();
 static CanardPortID port_id_calibration          = std::numeric_limits<CanardPortID>::max();
+static CanardPortID port_id_coordinates          = std::numeric_limits<CanardPortID>::max();
 
 static uint16_t update_period_ms_inputvoltage        =  3*1000;
 static uint16_t update_period_ms_internaltemperature = 10*1000;
@@ -173,6 +178,8 @@ const auto reg_rw_cyphal_pub_orientation_x_id               = node_registry->exp
 const auto reg_ro_cyphal_pub_orientation_x_type             = node_registry->route ("cyphal.pub.orientation_x.type",            {true}, []() { return "uavcan.primitive.scalar.Real32.1.0"; });
 const auto reg_rw_cyphal_pub_calibration_id                 = node_registry->expose("cyphal.pub.calibration.id",                {true}, port_id_calibration);
 const auto reg_ro_cyphal_pub_calibration_type               = node_registry->route ("cyphal.pub.calibration.type",              {true}, []() { return "uavcan.primitive.array.Natural8.1.0"; });
+const auto reg_rw_cyphal_pub_coordinates_id                 = node_registry->expose("cyphal.pub.coordinates.id",                {true}, port_id_coordinates);
+const auto reg_ro_cyphal_pub_coordinates_type               = node_registry->route ("cyphal.pub.coordinates.type",              {true}, []() { return "uavcan.primitive.array.Real32.1.0"; });
 const auto reg_rw_pico_update_period_ms_inputvoltage        = node_registry->expose("pico.update_period_ms.inputvoltage",        {true}, update_period_ms_inputvoltage);
 const auto reg_rw_pico_update_period_ms_internaltemperature = node_registry->expose("pico.update_period_ms.internaltemperature", {true}, update_period_ms_internaltemperature);
 const auto reg_rw_pico_update_period_ms_orientation         = node_registry->expose("pico.update_period_ms.orientation",         {true}, update_period_ms_orientation);
@@ -187,6 +194,7 @@ const auto reg_rw_pico_update_period_ms_calibration         = node_registry->exp
 void setup()
 {
   Serial.begin(115200);
+  Serial1.begin(9600);
   // while(!Serial) { } /* only for debug */
   delay(1000);
 
@@ -250,6 +258,8 @@ void setup()
     orientation_x_pub = node_hdl.create_publisher<uavcan::primitive::scalar::Real32_1_0>(port_id_orientation_x, 1*100*1000UL /* = 100 msec in usecs. */);
   if (port_id_calibration != std::numeric_limits<CanardPortID>::max())
     calibration_pub = node_hdl.create_publisher<uavcan::primitive::array::Natural8_1_0>(port_id_calibration, 5*100*1000UL /* = 500 msec in usecs. */);
+  if (port_id_coordinates != std::numeric_limits<CanardPortID>::max())
+    coordinates_pub = node_hdl.create_publisher<uavcan::primitive::array::Real32_1_0>(port_id_coordinates, 1*1000*1000UL /* = 1 sec in usecs. */);
 
     /* set factory settings */
     if(update_period_ms_inputvoltage==0xFFFF)        update_period_ms_inputvoltage=3*1000;
@@ -367,6 +377,9 @@ void setup()
 
 void loop()
 {
+  while (Serial1.available()) {
+    parser.encode((char)Serial1.read());
+  }
   /* Deal with all pending events of the MCP2515 -
    * signaled by the INT pin being driven LOW.
    */
@@ -454,7 +467,7 @@ void loop()
     bno.getEvent(&orientationData, Adafruit_BNO055::VECTOR_EULER);
 
     uavcan::primitive::scalar::Real32_1_0 uavcan_orientation_x;
-    uavcan_orientation_x.value = orientationData.orientation.x;
+    uavcan_orientation_x.value = orientationData.orientation.x-180.0;
     if(orientation_x_pub) orientation_x_pub->publish(uavcan_orientation_x);
 
     prev_orientation = now;
@@ -470,6 +483,18 @@ void loop()
 /**************************************************************************************
  * FUNCTION DEFINITION
  **************************************************************************************/
+
+void onGgaUpdate(nmea::GgaData const gga)
+{
+  if (gga.fix_quality != nmea::FixQuality::Invalid)
+  {
+    uavcan::primitive::array::Real32_1_0 uavcan_coordinates;
+    uavcan_coordinates.value.push_back(gga.latitude);
+    uavcan_coordinates.value.push_back(gga.longitude);
+    uavcan_coordinates.value.push_back(gga.altitude);
+    if(coordinates_pub) coordinates_pub->publish(uavcan_coordinates);
+  }
+}
 
 void onReceiveBufferFull(CanardFrame const & frame)
 {
