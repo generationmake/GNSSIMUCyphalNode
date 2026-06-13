@@ -14,6 +14,7 @@
 #include <SPI.h>
 #include <Wire.h>
 #include <Adafruit_BNO055.h>
+#include <Adafruit_BNO08x.h>
 
 #include <107-Arduino-Cyphal.h>
 #include <107-Arduino-Cyphal-Support.h>
@@ -22,6 +23,8 @@
 #include <107-Arduino-littlefs.h>
 #include <107-Arduino-24LCxx.hpp>
 #include <ArduinoNmeaParser.h>
+
+#define CTRL_BNO085
 
 #define DBG_ENABLE_ERROR
 #define DBG_ENABLE_WARNING
@@ -71,7 +74,12 @@ ExecuteCommand::Response_1_1 onExecuteCommand_1_1_Request_Received(ExecuteComman
  **************************************************************************************/
 
 ArduinoNmeaParser parser(NULL, onGgaUpdate);
+#ifdef CTRL_BNO085
+Adafruit_BNO08x  bno(-1);
+sh2_SensorValue_t sensorValue;
+#else
 Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28);
+#endif
 
 DEBUG_INSTANCE(80, Serial);
 
@@ -196,7 +204,7 @@ void setup()
 {
   Serial.begin(115200);
   Serial1.begin(9600);
-  // while(!Serial) { } /* only for debug */
+//   while(!Serial) { } /* only for debug */
   delay(1000);
 
   Debug.prettyPrintOn(); /* Enable pretty printing on a shell. */
@@ -363,11 +371,20 @@ void setup()
   /* Leave configuration and enable MCP2515. */
   mcp2515.setNormalMode();
 
+#ifdef CTRL_BNO085
+  if (!bno.begin_I2C())
+  {
+    DBG_ERROR("No BNO085 detected");
+//    while (1);
+  }
+  bno085_setReports();
+#else
   if (!bno.begin())
   {
     DBG_ERROR("No BNO055 detected");
 //    while (1);
   }
+#endif
 
   /* Enable watchdog. */
 //  rp2040.wdt_begin(WATCHDOG_DELAY_ms);
@@ -390,6 +407,15 @@ void loop()
   /* Process all pending Cyphal actions.
    */
   node_hdl.spinSome();
+
+#ifdef CTRL_BNO085
+  if (bno.wasReset()) {
+    Serial.print("sensor was reset ");
+    bno085_setReports();
+  }
+
+  bno.getSensorEvent(&sensorValue);
+#endif
 
   /* Publish all the gathered data, although at various
    * different intervals.
@@ -449,15 +475,22 @@ void loop()
   /* BNO055 calibration data - every 500 ms */
   if((now - prev_calibration) > update_period_ms_calibration)
   {
+    uavcan::primitive::array::Natural8_1_0 uavcan_calibration;
+#ifdef CTRL_BNO085
+    uavcan_calibration.value.push_back(sensorValue.status);
+    uavcan_calibration.value.push_back(0);
+    uavcan_calibration.value.push_back(0);
+    uavcan_calibration.value.push_back(0);
+#else
     uint8_t system, gyro, accel, mag;
     system = gyro = accel = mag = 0;
     bno.getCalibration(&system, &gyro, &accel, &mag);
 
-    uavcan::primitive::array::Natural8_1_0 uavcan_calibration;
     uavcan_calibration.value.push_back(system);
     uavcan_calibration.value.push_back(gyro);
     uavcan_calibration.value.push_back(accel);
     uavcan_calibration.value.push_back(mag);
+#endif
     if(calibration_pub) calibration_pub->publish(uavcan_calibration);
 
     prev_calibration = now;
@@ -465,10 +498,14 @@ void loop()
   /* update sensor function - every 100 ms */
   if((now - prev_orientation) > update_period_ms_orientation)
   {
-    bno.getEvent(&orientationData, Adafruit_BNO055::VECTOR_EULER);
-
     uavcan::primitive::scalar::Real32_1_0 uavcan_orientation_x;
+#ifdef CTRL_BNO085
+    uavcan_orientation_x.value = sensorValue.un.rotationVector.k*-180.0;
+#else
+    bno.getEvent(&orientationData, Adafruit_BNO055::VECTOR_EULER);
     uavcan_orientation_x.value = orientationData.orientation.x-180.0;
+#endif
+
     if(orientation_x_pub) orientation_x_pub->publish(uavcan_orientation_x);
 
     prev_orientation = now;
@@ -484,6 +521,14 @@ void loop()
 /**************************************************************************************
  * FUNCTION DEFINITION
  **************************************************************************************/
+
+// Here is where you define the sensor outputs you want to receive
+void bno085_setReports(void) {
+  Serial.println("Setting desired reports");
+  if (! bno.enableReport(SH2_ROTATION_VECTOR)) {
+    Serial.println("Could not enable rotation vector");
+  }
+}
 
 void onGgaUpdate(nmea::GgaData const gga)
 {
